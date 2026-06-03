@@ -1,0 +1,92 @@
+# Ezply
+
+Job application copilot MVP.
+
+## v1 shape
+- Discover relevant jobs from multiple reliable sources.
+- Score fit against a saved resume.
+- Tailor resume content for a specific JD.
+- Autofill common application fields.
+- Keep the user in control before submission.
+
+## Stack
+- Python 3.11+
+- FastAPI
+- SQLite
+
+## Configuration
+Set Greenhouse board slugs before importing jobs:
+
+```bash
+export EZPLY_GREENHOUSE_BOARDS="company-one,company-two"
+```
+
+The value should be a comma-separated list of public Greenhouse board slugs.
+
+## Resume workflow
+Save your canonical resume once, then reuse it for ranking:
+
+```bash
+curl -X PUT http://127.0.0.1:8000/resume \
+	-H 'Content-Type: application/json' \
+	-d '{"display_name":"Primary Resume","resume_text":"Python FastAPI SQL internship"}'
+
+curl -X POST http://127.0.0.1:8000/jobs/rank \
+	-H 'Content-Type: application/json' \
+	-d '{"limit":25}'
+```
+
+If you already have a resume saved, `/jobs/rank` will use it automatically.
+
+## Autofill (encrypted local storage)
+Save an autofill profile (personal details) encrypted with a passphrase. The service stores the encrypted blob locally in the app database.
+
+Save a profile:
+
+```bash
+curl -X PUT http://127.0.0.1:8000/autofill \
+	-H 'Content-Type: application/json' \
+	-d '{"display_name":"Primary Autofill","passphrase":"your-pass","profile":{"name":"Alice","email":"alice@example.com","phone":"+1-555-1234"}}'
+```
+
+Export (decrypt) profile:
+
+```bash
+curl -X POST http://127.0.0.1:8000/autofill/export \
+	-H 'Content-Type: application/json' \
+	-d '{"passphrase":"your-pass"}'
+```
+
+Only the local database stores the encrypted blob — the service does not transmit or store your passphrase.
+
+## Run locally
+1. Create a virtual environment.
+2. Activate the virtual environment.
+3. Install the project in editable mode.
+4. Start the API server with Uvicorn.
+
+Example:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+uvicorn ezply.main:app --reload
+```
+
+Preferred workflow:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e .[dev]
+uvicorn ezply.main:app --reload
+```
+
+Or use the Makefile targets:
+
+```bash
+make venv
+make install
+make run
+```
