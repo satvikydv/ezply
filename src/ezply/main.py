@@ -21,6 +21,9 @@ from ezply.schemas import (
     AutofillExportResponse,
     AssistedApplyRequest,
     AssistedApplyResponse,
+    AttemptCreateRequest,
+    AttemptResponse,
+    AttemptListResponse,
     SourceListResponse,
     SourceResponse,
 )
@@ -30,6 +33,7 @@ from ezply.services.registry import get_supported_sources, resolve_source
 from ezply.settings import get_settings
 from ezply.services.autofill import save_autofill_profile, load_autofill_profile
 from ezply.services.assisted_apply import assisted_apply_greenhouse, PlaywrightNotAvailable
+from ezply.services.apply_queue import create_attempt, list_attempts, get_attempt, update_attempt_result
 
 app = FastAPI(title="Ezply", version="0.1.0")
 fit_scorer = FitScorer()
@@ -215,3 +219,70 @@ async def assist_apply(request: AssistedApplyRequest) -> AssistedApplyResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
     return AssistedApplyResponse(job_id=request.job_id, job_url=job.source_url, filled=result.get("filled", {}), ready_to_submit=result.get("ready_to_submit", False))
+
+
+@app.post("/apply/queue", response_model=AttemptResponse)
+async def enqueue_apply(request: AttemptCreateRequest) -> AttemptResponse:
+    async with async_session_factory() as session:
+        job = await session.get(Job, request.job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+    attempt = await create_attempt(request.job_id)
+    return AttemptResponse(
+        id=attempt.id,
+        job_id=attempt.job_id,
+        status=attempt.status,
+        created_at=attempt.created_at.isoformat(),
+        updated_at=attempt.updated_at.isoformat() if attempt.updated_at else None,
+        result=None,
+    )
+
+
+@app.get("/apply/attempts", response_model=AttemptListResponse)
+async def list_apply_attempts() -> AttemptListResponse:
+    attempts = await list_attempts()
+    return AttemptListResponse(
+        attempts=[
+            AttemptResponse(
+                id=a.id,
+                job_id=a.job_id,
+                status=a.status,
+                created_at=a.created_at.isoformat(),
+                updated_at=a.updated_at.isoformat() if a.updated_at else None,
+                result=None,
+            )
+            for a in attempts
+        ]
+    )
+
+
+@app.post("/apply/attempts/{attempt_id}/run", response_model=AttemptResponse)
+async def run_attempt(attempt_id: int, passphrase: str | None = None) -> AttemptResponse:
+    attempt = await get_attempt(attempt_id)
+    if attempt is None:
+        raise HTTPException(status_code=404, detail="Attempt not found")
+
+    async with async_session_factory() as session:
+        job = await session.get(Job, attempt.job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+    try:
+        # run assisted apply and persist result
+        result = await assisted_apply_greenhouse(job.source_url, passphrase or "", confirm_submit=False)
+        result_text = str(result)
+        updated = await update_attempt_result(attempt.id, "completed", result_text)
+    except PlaywrightNotAvailable as e:
+        updated = await update_attempt_result(attempt.id, "error", str(e))
+    except Exception as e:
+        updated = await update_attempt_result(attempt.id, "failed", str(e))
+
+    return AttemptResponse(
+        id=updated.id,
+        job_id=updated.job_id,
+        status=updated.status,
+        created_at=updated.created_at.isoformat(),
+        updated_at=updated.updated_at.isoformat() if updated.updated_at else None,
+        result=None,
+    )

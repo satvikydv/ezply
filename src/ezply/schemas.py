@@ -109,3 +109,22 @@ class AssistedApplyResponse(BaseModel):
     job_url: str
     filled: dict
     ready_to_submit: bool
+
+
+class AttemptCreateRequest(BaseModel):
+    job_id: int
+    passphrase: str
+    confirm_submit: bool = False
+
+
+class AttemptResponse(BaseModel):
+    id: int
+    job_id: int
+    status: str
+    created_at: str
+    updated_at: str | None = None
+    result: dict | None = None
+
+
+class AttemptListResponse(BaseModel):
+    attempts: list[AttemptResponse]
