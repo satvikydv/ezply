@@ -31,6 +31,7 @@ class JobResponse(BaseModel):
     source: str
     source_url: str
     description: str
+    posted_at: str | None = None
 
 
 class JobListResponse(BaseModel):
@@ -114,6 +115,11 @@ class AssistedApplyResponse(BaseModel):
 class AttemptCreateRequest(BaseModel):
     job_id: int
     passphrase: str
+    confirm_submit: bool = False
+
+
+class AttemptRunRequest(BaseModel):
+    passphrase: str = ""
     confirm_submit: bool = False
 
 

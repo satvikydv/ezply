@@ -1,5 +1,4 @@
 from typing import Dict, Any
-import asyncio
 
 from ezply.services.autofill import load_autofill_profile
 

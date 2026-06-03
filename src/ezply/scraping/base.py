@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(frozen=True)
@@ -11,6 +12,7 @@ class JobRecord:
     source: str
     source_url: str
     description: str
+    posted_at: datetime | None = None
 
 
 class JobSource(ABC):

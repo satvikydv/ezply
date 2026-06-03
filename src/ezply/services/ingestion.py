@@ -27,6 +27,7 @@ async def ingest_source(source: JobSource) -> ImportJobsResponse:
                     source=job.source,
                     source_url=job.source_url,
                     description=job.description,
+                    posted_at=job.posted_at,
                 )
             )
             imported_count += 1
