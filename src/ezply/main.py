@@ -1,5 +1,6 @@
 from sqlalchemy import select
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 
 from ezply.db import async_session_factory, init_db
 from ezply.models import Job, ResumeProfile
@@ -93,6 +94,122 @@ async def list_jobs() -> JobListResponse:
             for job in jobs
         ]
     )
+
+
+    @app.get("/jobs/search", response_model=JobListResponse)
+    async def search_jobs(role: str | None = None, location: str | None = None, limit: int = 100) -> JobListResponse:
+            async with async_session_factory() as session:
+                    result = await session.execute(select(Job).order_by(Job.id.desc()).limit(limit))
+                    jobs = result.scalars().all()
+
+            if not role and not location:
+                    return JobListResponse(jobs=[
+                            JobResponse(
+                                    id=job.id,
+                                    title=job.title,
+                                    company=job.company,
+                                    location=job.location,
+                                    seniority=job.seniority,
+                                    source=job.source,
+                                    source_url=job.source_url,
+                                    description=job.description,
+                            )
+                            for job in jobs
+                    ])
+
+            role_terms = [t.strip().lower() for t in role.split(",") if t.strip()] if role else []
+
+            def matches(job):
+                    text = " ".join([job.title or "", job.company or "", job.description or ""]).lower()
+                    if location and job.location:
+                            if location.lower() not in (job.location or "").lower():
+                                    return False
+                    if not role_terms:
+                            return True
+                    return any(term in text for term in role_terms)
+
+            filtered = [job for job in jobs if matches(job)]
+
+            return JobListResponse(jobs=[
+                    JobResponse(
+                            id=job.id,
+                            title=job.title,
+                            company=job.company,
+                            location=job.location,
+                            seniority=job.seniority,
+                            source=job.source,
+                            source_url=job.source_url,
+                            description=job.description,
+                    )
+                    for job in filtered
+            ])
+
+
+    @app.get("/ui", response_class=HTMLResponse)
+    def ui() -> HTMLResponse:
+            html = """
+            <!doctype html>
+            <html>
+                <head>
+                    <meta charset="utf-8" />
+                    <title>Ezply — Jobs UI</title>
+                    <style>
+                        body { font-family: system-ui, sans-serif; padding: 20px; }
+                        input, button { padding: 8px; margin: 4px; }
+                        .job { border: 1px solid #eee; padding: 8px; margin: 8px 0; }
+                    </style>
+                </head>
+                <body>
+                    <h1>Ezply — Search Jobs</h1>
+                    <div>
+                        <label>Role keywords (comma-separated):</label>
+                        <input id="role" placeholder="e.g. data engineer, frontend" size="40" />
+                        <label>Location:</label>
+                        <input id="location" placeholder="optional" size="20" />
+                        <button id="search">Search</button>
+                    </div>
+                    <div>
+                        <label>Passphrase (optional for enqueue):</label>
+                        <input id="passphrase" type="password" size="30" />
+                    </div>
+                    <div id="results"></div>
+
+                    <script>
+                    async function search() {
+                        const role = document.getElementById('role').value;
+                        const location = document.getElementById('location').value;
+                        const q = new URLSearchParams();
+                        if (role) q.set('role', role);
+                        if (location) q.set('location', location);
+                        const res = await fetch('/jobs/search?' + q.toString());
+                        const data = await res.json();
+                        const container = document.getElementById('results');
+                        container.innerHTML = '';
+                        for (const job of data.jobs) {
+                            const div = document.createElement('div');
+                            div.className = 'job';
+                            div.innerHTML = `<strong>${job.title}</strong> — ${job.company} <br/> <small>${job.location || ''} • ${job.source}</small><p>${job.description.slice(0,300).replace(/\n/g,' ')}...</p>`;
+                            const btn = document.createElement('button');
+                            btn.textContent = 'Enqueue Apply';
+                            btn.onclick = async () => {
+                                const pass = document.getElementById('passphrase').value || '';
+                                const r = await fetch('/apply/queue', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({job_id: job.id, passphrase: pass})});
+                                if (r.ok) {
+                                    alert('Enqueued attempt for job ' + job.id);
+                                } else {
+                                    alert('Failed to enqueue: ' + r.statusText);
+                                }
+                            };
+                            div.appendChild(btn);
+                            container.appendChild(div);
+                        }
+                    }
+                    document.getElementById('search').addEventListener('click', search);
+                    </script>
+                </body>
+            </html>
+            """
+            return HTMLResponse(content=html)
 
 
 @app.get("/resume", response_model=ResumeProfileResponse)
