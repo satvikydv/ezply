@@ -1,6 +1,9 @@
-from sqlalchemy import select
-from fastapi import FastAPI, HTTPException
+import io
+import json
+
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
+from sqlalchemy import select
 
 from ezply.db import async_session_factory, init_db
 from ezply.models import Job, ResumeProfile
@@ -36,7 +39,7 @@ from ezply.settings import get_settings
 from ezply.services.autofill import save_autofill_profile, load_autofill_profile
 from ezply.services.assisted_apply import assisted_apply_greenhouse, PlaywrightNotAvailable
 from ezply.services.apply_queue import create_attempt, list_attempts, get_attempt, update_attempt_result
-import json
+from ezply.services.resume_parser import extract_autofill, parse_pdf
 
 app = FastAPI(title="Ezply", version="0.1.0")
 fit_scorer = FitScorer()
@@ -301,6 +304,31 @@ def ui() -> HTMLResponse:
                                 </div>
                                 <label for="resume_text">Resume text</label>
                                 <textarea id="resume_text" placeholder="Paste the resume text used for ranking and tailoring"></textarea>
+                                <div class="stack" style="margin-top:10px;">
+                                    <div class="row">
+                                        <div>
+                                            <label for="resume_pdf">Upload PDF to parse</label>
+                                            <input id="resume_pdf" type="file" accept=".pdf" />
+                                        </div>
+                                        <div class="actions" style="align-items:end; justify-content:flex-end;">
+                                            <button class="secondary" id="upload_resume_btn" type="button">Parse PDF</button>
+                                        </div>
+                                    </div>
+                                    <div id="extracted_autofill" style="display:none;">
+                                        <label>Extracted autofill fields</label>
+                                        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 0;">
+                                            <span id="af_name_display" class="badge"></span>
+                                            <span id="af_email_display" class="badge"></span>
+                                            <span id="af_phone_display" class="badge"></span>
+                                            <span id="af_location_display" class="badge"></span>
+                                            <span id="af_linkedin_display" class="badge"></span>
+                                            <span id="af_github_display" class="badge"></span>
+                                        </div>
+                                        <div class="actions">
+                                            <button class="secondary" id="apply_extracted_autofill" type="button">Use as autofill</button>
+                                        </div>
+                                    </div>
+                                </div>
                                 <div class="status" id="resume_status">No resume loaded.</div>
                             </div>
                         </section>
@@ -724,6 +752,53 @@ def ui() -> HTMLResponse:
                         }
                     }
 
+                    async function uploadResume() {
+                        const fileInput = document.getElementById('resume_pdf');
+                        const file = fileInput.files[0];
+                        if (!file) { setStatus('resume_status', 'Select a PDF file first.', 'error'); return; }
+                        try {
+                            setStatus('resume_status', 'Uploading and parsing PDF...');
+                            const form = new FormData();
+                            form.append('file', file);
+                            const res = await fetch('/resume/upload', { method: 'POST', body: form });
+                            const body = await res.json();
+                            if (!res.ok) throw new Error(body.detail || 'Upload failed');
+                            document.getElementById('resume_text').value = body.resume_text;
+                            document.getElementById('fitResume').value = body.resume_text;
+                            const af = body.autofill || {};
+                            const displayEls = {
+                                name: 'af_name_display', email: 'af_email_display', phone: 'af_phone_display',
+                                location: 'af_location_display', linkedin: 'af_linkedin_display', github: 'af_github_display',
+                            };
+                            for (const [key, id] of Object.entries(displayEls)) {
+                                document.getElementById(id).textContent = af[key] ? `${key}: ${af[key]}` : '';
+                            }
+                            document.getElementById('extracted_autofill').style.display = 'block';
+                            setStatus('resume_status', `Parsed ${body.filename}. Text and autofill extracted.`, 'success');
+                        } catch (err) {
+                            setStatus('resume_status', err.message, 'error');
+                        }
+                    }
+
+                    function applyExtractedAutofill() {
+                        const afEls = ['name', 'email', 'phone', 'location', 'linkedin', 'github'];
+                        const profile = {};
+                        for (const key of afEls) {
+                            const text = document.getElementById('af_' + key + '_display').textContent;
+                            if (text) {
+                                const val = text.includes(': ') ? text.split(': ').slice(1).join(': ') : text;
+                                if (val.trim()) profile[key] = val.trim();
+                            }
+                        }
+                        if (Object.keys(profile).length) {
+                            document.getElementById('af_json').value = JSON.stringify(profile, null, 2);
+                            showTab('autofill');
+                            setStatus('autofill_status', 'Loaded parsed autofill from resume. Save with a passphrase.', 'success');
+                        } else {
+                            setStatus('resume_status', 'No autofill fields to apply.', 'error');
+                        }
+                    }
+
                     async function refreshEverything() {
                         await Promise.allSettled([searchJobs(), refreshAttempts()]);
                         setStatus('resume_status', 'Click Load to fetch the saved resume.', '');
@@ -739,6 +814,8 @@ def ui() -> HTMLResponse:
                         });
                         document.getElementById('save_resume').addEventListener('click', saveResume);
                         document.getElementById('load_resume').addEventListener('click', loadResume);
+                        document.getElementById('upload_resume_btn').addEventListener('click', uploadResume);
+                        document.getElementById('apply_extracted_autofill').addEventListener('click', applyExtractedAutofill);
                         document.getElementById('save_autofill').addEventListener('click', saveAutofill);
                         document.getElementById('load_autofill').addEventListener('click', loadAutofill);
                         document.getElementById('export_autofill').addEventListener('click', exportAutofill);
@@ -788,6 +865,21 @@ async def upsert_resume(request: ResumeProfileRequest) -> ResumeProfileUpsertRes
         await session.refresh(resume)
 
     return ResumeProfileUpsertResponse(resume=_serialize_resume(resume))
+
+
+@app.post("/resume/upload")
+async def upload_resume(file: UploadFile = File(...)):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    try:
+        content = await file.read()
+        text = parse_pdf(io.BytesIO(content))
+        autofill = extract_autofill(text)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse PDF: {str(e)}")
+
+    return {"resume_text": text, "autofill": autofill, "filename": file.filename}
 
 
 @app.put("/autofill", response_model=AutofillProfileResponse)
