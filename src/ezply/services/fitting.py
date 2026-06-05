@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 import re
 
+from ezply.services.llm import score_fit as llm_score_fit
+
 STOPWORDS = {
     "a",
     "an",
@@ -33,13 +35,37 @@ class FitResult:
     summary: str
     matched_keywords: list[str]
     missing_keywords: list[str]
+    reasoning: str = ""
+    suggestions: list[str] = ()
+    scoring_mode: str = "keyword"
 
 
 class FitScorer:
-    def score(self, resume_text: str, job_text: str) -> FitResult:
+    def score(self, resume_text: str, job_text: str, mode: str = "auto") -> FitResult:
         if not resume_text.strip() or not job_text.strip():
             return FitResult(score=0.0, summary="Missing resume or job text", matched_keywords=[], missing_keywords=[])
 
+        fallback = self._keyword_score(resume_text, job_text)
+
+        if mode == "keyword":
+            return fallback
+
+        if mode == "llm" or mode == "auto":
+            llm_result = llm_score_fit(resume_text, job_text)
+            if llm_result is not None:
+                return FitResult(
+                    score=llm_result.score,
+                    summary=llm_result.summary,
+                    matched_keywords=llm_result.matched_keywords,
+                    missing_keywords=llm_result.missing_keywords,
+                    reasoning=llm_result.reasoning,
+                    suggestions=list(llm_result.suggestions),
+                    scoring_mode="llm",
+                )
+
+        return fallback
+
+    def _keyword_score(self, resume_text: str, job_text: str) -> FitResult:
         resume_keywords = self._extract_keywords(resume_text)
         job_keywords = self._extract_keywords(job_text)
         matched_keywords = sorted(resume_keywords & job_keywords)

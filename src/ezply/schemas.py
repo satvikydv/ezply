@@ -41,6 +41,7 @@ class JobListResponse(BaseModel):
 class FitScoreRequest(BaseModel):
     resume_text: str
     job_text: str
+    mode: str = "auto"  # "auto", "keyword", or "llm"
 
 
 class FitScoreResponse(BaseModel):
@@ -48,6 +49,9 @@ class FitScoreResponse(BaseModel):
     summary: str
     matched_keywords: list[str]
     missing_keywords: list[str]
+    reasoning: str = ""
+    suggestions: list[str] = []
+    scoring_mode: str = "keyword"
 
 
 class JobRankRequest(BaseModel):

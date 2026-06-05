@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     lever_boards: str = ""
     ashby_boards: str = ""
     workable_boards: str = ""
+    llm_api_key: str = ""
+    llm_model: str = "gpt-4o-mini"
+    llm_base_url: str = ""
 
     model_config = SettingsConfigDict(env_prefix="EZPLY_", env_file=".env", extra="ignore")
 

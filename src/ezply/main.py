@@ -415,6 +415,12 @@ def ui() -> HTMLResponse:
                                         <button class="secondary" id="rankJobsBtn" type="button">Rank jobs</button>
                                         <button class="primary" id="scoreFitBtn" type="button">Score text</button>
                                     </div>
+                                    <label for="fitMode">Scoring mode</label>
+                                    <select id="fitMode" style="margin-bottom:10px;">
+                                        <option value="auto">Auto (LLM if available, else keyword)</option>
+                                        <option value="llm">LLM (requires API key)</option>
+                                        <option value="keyword">Keyword (no API needed)</option>
+                                    </select>
                                 </div>
                                 <div class="row">
                                     <div>
@@ -709,9 +715,20 @@ def ui() -> HTMLResponse:
                             const resume_text = document.getElementById('fitResume').value || '';
                             const job_text = document.getElementById('fitJob').value || '';
                             if (!resume_text.trim() || !job_text.trim()) throw new Error('Paste both resume and job text first.');
-                            const data = await api('/fit/score', { method: 'POST', body: JSON.stringify({ resume_text, job_text }) });
-                            document.getElementById('fit_result').textContent = JSON.stringify(data, null, 2);
-                            setStatus('fit_status', `Score: ${Math.round(data.score)}.`, 'success');
+                            const mode = document.getElementById('fitMode').value || 'auto';
+                            const data = await api('/fit/score', { method: 'POST', body: JSON.stringify({ resume_text, job_text, mode }) });
+                            const lines = [
+                                `Score: ${Math.round(data.score * 100)}% (${data.scoring_mode})`,
+                                data.summary,
+                                '',
+                                data.reasoning ? `Reasoning: ${data.reasoning}` : '',
+                                data.suggestions.length ? `Suggestions:\n${data.suggestions.map(s => '  • ' + s).join('\n')}` : '',
+                                '',
+                                `Matched: ${(data.matched_keywords || []).join(', ')}`,
+                                `Missing: ${(data.missing_keywords || []).join(', ')}`,
+                            ].filter(Boolean).join('\n');
+                            document.getElementById('fit_result').textContent = lines;
+                            setStatus('fit_status', `Score: ${Math.round(data.score * 100)}% — ${data.scoring_mode}`, 'success');
                         } catch (err) {
                             setStatus('fit_status', err.message, 'error');
                         }
@@ -906,12 +923,15 @@ async def export_autofill(request: AutofillExportRequest) -> AutofillExportRespo
 
 @app.post("/fit/score", response_model=FitScoreResponse)
 def score_fit(request: FitScoreRequest) -> FitScoreResponse:
-    result = fit_scorer.score(request.resume_text, request.job_text)
+    result = fit_scorer.score(request.resume_text, request.job_text, mode=request.mode)
     return FitScoreResponse(
         score=result.score,
         summary=result.summary,
         matched_keywords=result.matched_keywords,
         missing_keywords=result.missing_keywords,
+        reasoning=result.reasoning,
+        suggestions=list(result.suggestions),
+        scoring_mode=result.scoring_mode,
     )
 
 
