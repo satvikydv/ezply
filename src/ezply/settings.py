@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     lever_boards: str = ""
     ashby_boards: str = ""
     workable_boards: str = ""
+    llm_provider: str = "openai"  # "openai" or "gemini"
     llm_api_key: str = ""
     llm_model: str = "gpt-4o-mini"
     llm_base_url: str = ""

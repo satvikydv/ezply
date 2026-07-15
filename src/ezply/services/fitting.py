@@ -1,91 +1,78 @@
-from dataclasses import dataclass
-import re
-
-from ezply.services.llm import score_fit as llm_score_fit
-
-STOPWORDS = {
-    "a",
-    "an",
-    "and",
-    "as",
-    "at",
-    "be",
-    "by",
-    "for",
-    "from",
-    "in",
-    "is",
-    "it",
-    "of",
-    "on",
-    "or",
-    "that",
-    "the",
-    "this",
-    "to",
-    "with",
-    "you",
-    "your",
-}
-
-
-@dataclass(frozen=True)
-class FitResult:
-    score: float
-    summary: str
-    matched_keywords: list[str]
-    missing_keywords: list[str]
-    reasoning: str = ""
-    suggestions: list[str] = ()
-    scoring_mode: str = "keyword"
-
+import json
+import os
+from anthropic import Anthropic
 
 class FitScorer:
-    def score(self, resume_text: str, job_text: str, mode: str = "auto") -> FitResult:
-        if not resume_text.strip() or not job_text.strip():
-            return FitResult(score=0.0, summary="Missing resume or job text", matched_keywords=[], missing_keywords=[])
+    def __init__(self):
+        # Assumes ANTHROPIC_API_KEY is in environment
+        self.client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        self.model = "claude-3-5-sonnet-20241022" # Recommended standard model for this type of task
 
-        fallback = self._keyword_score(resume_text, job_text)
+    def score(self, resume_text: str, job_description: str) -> dict:
+        """
+        Calls Claude API to score the job fit.
+        Returns a dict matching the PRD schema:
+        {
+          "fit_score": int,
+          "reasoning": str,
+          "key_requirements": list[str],
+          "concerns": list[str],
+          "suggested_resume_emphasis": list[str]
+        }
+        """
+        if not self.client.api_key:
+            # Fallback or dummy if no API key
+            return {
+                "fit_score": 0,
+                "reasoning": "No Anthropic API key found.",
+                "key_requirements": [],
+                "concerns": [],
+                "suggested_resume_emphasis": []
+            }
 
-        if mode == "keyword":
-            return fallback
+        prompt = f"""
+You are an expert technical recruiter and AI assistant. Please evaluate the following job description against the provided resume.
+Output your evaluation as a strict JSON object matching this schema, with no other text:
+{{
+  "fit_score": integer (0 to 100),
+  "reasoning": "1-2 sentence explanation of the score",
+  "key_requirements": ["list of main requirements from the job"],
+  "concerns": ["list of potential mismatch concerns based on resume vs job"],
+  "suggested_resume_emphasis": ["list of things from the resume to highlight for this job"]
+}}
 
-        if mode == "llm" or mode == "auto":
-            llm_result = llm_score_fit(resume_text, job_text)
-            if llm_result is not None:
-                return FitResult(
-                    score=llm_result.score,
-                    summary=llm_result.summary,
-                    matched_keywords=llm_result.matched_keywords,
-                    missing_keywords=llm_result.missing_keywords,
-                    reasoning=llm_result.reasoning,
-                    suggestions=list(llm_result.suggestions),
-                    scoring_mode="llm",
-                )
+<job_description>
+{job_description}
+</job_description>
 
-        return fallback
-
-    def _keyword_score(self, resume_text: str, job_text: str) -> FitResult:
-        resume_keywords = self._extract_keywords(resume_text)
-        job_keywords = self._extract_keywords(job_text)
-        matched_keywords = sorted(resume_keywords & job_keywords)
-        missing_keywords = sorted(job_keywords - resume_keywords)
-
-        if not job_keywords:
-            return FitResult(score=0.0, summary="No meaningful keywords found in job text", matched_keywords=[], missing_keywords=[])
-
-        overlap_ratio = len(matched_keywords) / len(job_keywords)
-        score = round(min(1.0, overlap_ratio), 2)
-
-        if score >= 0.65:
-            summary = "Strong keyword match"
-        elif score >= 0.35:
-            summary = "Moderate keyword match"
-        else:
-            summary = "Weak keyword match"
-
-        return FitResult(score=score, summary=summary, matched_keywords=matched_keywords, missing_keywords=missing_keywords)
-
-    def _extract_keywords(self, text: str) -> set[str]:
-        tokens = re.findall(r"[a-zA-Z0-9+#.]+", text.lower())
-        return {token for token in tokens if len(token) > 2 and token not in STOPWORDS}
+<resume>
+{resume_text}
+</resume>
+"""
+        
+        try:
+            message = self.client.messages.create(
+                model=self.model,
+                max_tokens=1000,
+                temperature=0.0,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            # Extract JSON block if surrounded by markdown, or parse raw
+            response_text = message.content[0].text
+            # Basic cleanup in case Claude adds markdown
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0].strip()
+                
+            return json.loads(response_text)
+        except Exception as e:
+            return {
+                "fit_score": 0,
+                "reasoning": f"Error calling LLM: {str(e)}",
+                "key_requirements": [],
+                "concerns": [],
+                "suggested_resume_emphasis": []
+            }

@@ -138,3 +138,41 @@ class AttemptResponse(BaseModel):
 
 class AttemptListResponse(BaseModel):
     attempts: list[AttemptResponse]
+
+
+class PipelineRunRequest(BaseModel):
+    source_names: list[str] | None = None
+    import_first: bool = False
+    threshold: float = 0.4
+    max_jobs: int = 50
+    apply: bool = False
+    passphrase: str = ""
+
+
+class PipelineJobResult(BaseModel):
+    job_id: int
+    title: str
+    company: str
+    score: float
+    scoring_mode: str
+    summary: str
+    attempt_id: int | None = None
+    applied: bool = False
+    apply_status: str | None = None
+
+
+class PipelineStepResult(BaseModel):
+    step: str
+    status: str
+    detail: str
+
+
+class PipelineRunResponse(BaseModel):
+    status: str
+    total_jobs_scored: int
+    jobs_above_threshold: int
+    attempts_queued: int
+    attempts_applied: int
+    threshold: float
+    steps: list[PipelineStepResult]
+    results: list[PipelineJobResult]
